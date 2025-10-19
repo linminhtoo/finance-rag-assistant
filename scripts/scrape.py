@@ -9,7 +9,7 @@ from urllib.parse import urljoin
 import pandas as pd
 import requests
 from loguru import logger
-from lxml.html import fromstring, tostring
+from lxml.html import HtmlMixin, fromstring, tostring
 from tqdm import tqdm
 
 # required by SEC policies
@@ -25,9 +25,12 @@ _INVISIBLES_RE = re.compile(r"[\u200B-\u200D\u2060\uFEFF\u00AD]")
 _UNISPACES_RE = re.compile(r"[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]")
 
 # for table parsing
-_CAPTION_DENY_RE   = re.compile(r"^(table of contents|index)$", re.I)
-_CAPTION_KEYS_RE   = re.compile(r"\b(table|schedule|summary|the following table|the table below)\b", re.I)
-_CAPTION_UNITS_RE  = re.compile(r"\((?:in|dollars|millions|thousands|unaudited)[^)]+\)", re.I)
+_CAPTION_DENY_RE = re.compile(r"^(table of contents|index)$", re.I)
+_CAPTION_KEYS_RE = re.compile(r"\b(table|schedule|summary|the following table|the table below)\b", re.I)
+_CAPTION_UNITS_RE = re.compile(r"\((?:in|dollars|millions|thousands|unaudited)[^)]+\)", re.I)
+_BULLET_CHARS = {"●", "•", "·", "▪", "–", "-", "■", "◦", "‣"}
+_NUMERIC_RE = re.compile(r"[0-9]|[$,]|\((?:\d|[0-9,.$])+\)")  # crude but effective
+_BORDER0_RE = re.compile(r"border\s*:\s*0", re.I)
 
 
 # TODO: define proper return dataclass
@@ -64,23 +67,162 @@ def download_primary(cik, acc_no, primary_doc, timeout: int = 60):
     return html, url
 
 
-def strip_html_to_text(html):
+####################################
+# TABLE CLASSIFICATION
+####################################
+def _table_shape(el) -> tuple[int, int, int]:
+    rows = el.xpath(".//tr")
+    r = len(rows)
+    c = 0
+    th = 0
+    for tr in rows:
+        tds = tr.xpath("./td|./th")
+        c = max(c, len(tds))
+        th += len(tr.xpath("./th"))
+    return r, c, th
+
+
+def _firstrow_cell_styles(el) -> list[str]:
+    rows = el.xpath(".//tr")
+    if not rows:
+        return []
+    return [(td.attrib.get("style", "") or "") for td in rows[0].xpath("./td|./th")]
+
+
+def _table_text_cells(el) -> list[str]:
+    return [_clean_inline_text(t) for t in el.xpath(".//td|.//th")]
+
+
+def _is_tiny_width(style: str) -> bool:
+    m = re.search(r"width\s*:\s*(\d+(?:\.\d+)?)\s*(pt|px)", style or "", flags=re.I)
+    if not m:
+        return False
+    val, unit = float(m.group(1)), m.group(2).lower()
+    # normalize px→pt roughly (1px≈0.75pt) – not critical, just be consistent
+    if unit == "px":
+        val *= 0.75
+    return val <= 30.0
+
+
+def _looks_like_bullet_list(el) -> bool:
+    r, c, th = _table_shape(el)
+    if th > 0:  # headers -> likely a real data table
+        return False
+    if r <= 2 and c <= 3:
+        cells = _table_text_cells(el)
+        if not cells:
+            return False
+        # any explicit bullet char? (also catches Wingdings bullet that gets normalized)
+        has_bullet = any(
+            (v in _BULLET_CHARS) or v.strip() in _BULLET_CHARS or v.strip().startswith(tuple(_BULLET_CHARS))
+            for v in cells
+        )
+        # tiny first/second cells are classic vendor layout (e.g., width: 13.5pt)
+        styles = _firstrow_cell_styles(el)
+        tiny_cols = sum(1 for s in styles[:2] if _is_tiny_width(s))
+        # almost no digits in the row text (lists rarely have numeric columns)
+        digits_share = sum(bool(_NUMERIC_RE.search(t)) for t in cells) / max(len(cells), 1)
+        return has_bullet and tiny_cols >= 1 and digits_share < 0.25
+    return False
+
+
+def _looks_like_layout_table(el) -> bool:
+    # border:0 or role=presentation, no headers, few rows/cols
+    r, c, th = _table_shape(el)
+    style = el.attrib.get("style", "") or ""
+    role = el.attrib.get("role", "") or ""
+    cond_border0 = bool(_BORDER0_RE.search(style))
+    return th == 0 and r <= 3 and c <= 3 and (cond_border0 or role.lower() == "presentation")
+
+
+def _numeric_density(el) -> float:
+    cells = _table_text_cells(el)
+    if not cells:
+        return 0.0
+    return sum(bool(_NUMERIC_RE.search(t)) for t in cells) / len(cells)
+
+
+def _classify_table(el) -> str:
     """
-    Deprecated as it is worse than lxml parsing.
+    Returns one of: 'data' | 'list' | 'layout' | 'unknown'
     """
-    # Remove script/style sections
-    # FIXED: </\1> instead of </\\1>
-    text = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", html)
-    # Replace <br> with newline
-    text = re.sub(r"(?is)<br\s*/?>", "\n", text)
-    # Replace </p> with double newline
-    text = re.sub(r"(?is)</p>", "\n\n", text)
-    # Remove all other HTML tags
-    text = re.sub(r"(?is)<.*?>", " ", text)
-    # Collapse spaces/tabs
-    text = re.sub(r"[ \t]+", " ", text)
-    # Collapse excessive newlines
-    return re.sub(r"\n{3,}", "\n\n", text).strip()
+    if _looks_like_bullet_list(el):
+        return "list"
+    if _looks_like_layout_table(el):
+        return "layout"
+    r, c, th = _table_shape(el)
+    density = _numeric_density(el)
+    # heuristics: headers, size, or numeric density → "data"
+    if th > 0 or (r >= 3 and c >= 3) or density >= 0.35:
+        return "data"
+    # tiny one-row alignment tables usually aren't data
+    if r <= 2 and c <= 2 and density < 0.2:
+        return "layout"
+    return "unknown"
+
+
+def _similar_table_signature(el) -> tuple[int, int, int, bool]:
+    r, c, th = _table_shape(el)
+    style = el.attrib.get("style") or ""
+    border0 = bool(_BORDER0_RE.search(style))
+    return (c, th, int(border0), r >= 5)
+
+
+def _gather_adjacent_data_tables(tables: list) -> list[list]:
+    """
+    Group consecutive 'data' tables that look similar (same columns/headers),
+    with no big non-table blocks in between (aside from whitespace).
+    """
+    groups = []
+    i = 0
+    N = len(tables)
+    while i < N:
+        cur = tables[i]
+        kind = _classify_table(cur)
+        if kind != "data":
+            groups.append([cur])  # non-data tables stay as singletons (will be skipped later)
+            i += 1
+            continue
+        sig = _similar_table_signature(cur)
+        group = [cur]
+        j = i + 1
+        while j < N:
+            nxt = tables[j]
+            if _classify_table(nxt) != "data":
+                break
+            # require same coarse signature; stop on big mismatch
+            if _similar_table_signature(nxt) != sig:
+                break
+            # also ensure there isn't a heading/caption-like block inserted between them
+            between = []
+            node = group[-1]
+            n = node.getnext()
+            ok = True
+            while n is not None and n is not nxt:
+                # any 'blocky' captions / headings between → stop merging
+                tag = (n.tag or "").lower()
+                if tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+                    ok = False
+                    break
+                # short caption-like paragraph between? stop.
+                if tag in {"p", "div", "span"}:
+                    txt = _clean_inline_text(n.text_content())
+                    if _candidate_caption(txt, max_len=200):
+                        ok = False
+                        break
+                n = n.getnext()
+            if not ok:
+                break
+            group.append(nxt)
+            j += 1
+        groups.append(group)
+        i = j
+    return groups
+
+
+####################################
+# END OF TABLE CLASSIFICATION
+####################################
 
 
 def _normalize_ws(text: str) -> str:
@@ -91,45 +233,95 @@ def _normalize_ws(text: str) -> str:
     return text.strip()
 
 
-def extract_text_lxml_preserve_tables(html: str) -> str:
+def _is_isolated_page_number(s: str) -> bool:
+    # e.g., "99", "102", often a single line page header/footer number
+    return bool(re.fullmatch(r"\d{1,4}", s))
+
+
+def _drop_toc_headers(tree):
+    """
+    Remove elements that are exactly 'Table of Contents' (case-insensitive),
+    plus a preceding isolated page number if present.
+    """
+    # Consider small block-ish nodes that often hold TOC headers
+    candidates = tree.xpath("//p|//div|//span|//a|//h1|//h2|//h3|//h4|//h5|//h6")
+
+    for el in list(candidates):
+        txt = _clean_inline_text(el.text_content())
+        if re.fullmatch(r"(?i)table\s+of\s+contents", txt):
+            # remove preceding isolated page number if present
+            prev = el.getprevious()
+            if prev is not None:
+                ptxt = _clean_inline_text(prev.text_content())
+                if _is_isolated_page_number(ptxt):
+                    parent = prev.getparent()
+                    if parent is not None:
+                        parent.remove(prev)
+            # remove the TOC node itself
+            parent = el.getparent()
+            if parent is not None:
+                parent.remove(el)
+
+
+def extract_text_without_tables_with_markers(html: str, doc_id: str) -> str:
+    # TODO: fix lxml typing
     tree = fromstring(html.encode("utf-8"))
+    _drop_toc_headers(tree)
 
-    # Drop obvious non-content
+    all_tables = tree.xpath("//table")
+    # Replace tables: data → marker; list → convert to bullets; layout/unknown → drop
+    for idx, t in enumerate(all_tables):
+        kind = _classify_table(t)
+
+        if kind == "data":
+            table_id = f"{doc_id}::table::{idx:04d}"
+            marker = f"[[TABLE::{table_id}]]"
+            placeholder = fromstring(f"<p>{marker}</p>")
+            t.addprevious(placeholder)
+            t.drop_tree()
+
+        elif kind == "list":
+            # Turn the row(s) into plaintext bullets instead of a marker
+            bullets = []
+            for tr in t.xpath(".//tr"):
+                cells = [_clean_inline_text(x.text_content()) for x in tr.xpath("./td|./th")]
+                # The last cell usually holds the text
+                if cells:
+                    text = cells[-1]
+                    if text:
+                        bullets.append(f"- {text}")
+            if bullets:
+                block = fromstring("<div></div>")
+                block.text = "\n".join(bullets)
+                t.addprevious(block)
+            t.drop_tree()
+
+        else:  # 'layout' or 'unknown' → drop
+            t.drop_tree()
+
+    # Drop non-content and linearize (your existing logic)
     for bad in tree.xpath("//script|//style|//noscript|//iframe|//svg|//form|//nav|//header|//footer"):
-        bad.getparent().remove(bad)
+        p = bad.getparent()
+        if p is not None:
+            p.remove(bad)
 
-    # Insert structural separators so text_content() doesn't mush everything together
-    # Paragraphs / breaks
     for el in tree.xpath("//br"):
-        el.drop_tag()  # keep tail
-        if el.tail is None:
-            el.tail = "\n"
-        else:
-            el.tail = el.tail + "\n"
-
+        el.drop_tag()
+        el.tail = (el.tail or "") + "\n"
     for el in tree.xpath("//p|//div"):
-        # add blank line after paragraphs / blocks
         el.tail = (el.tail or "") + "\n\n"
-
-    # lists
     for el in tree.xpath("//li"):
         el.text = el.text or ""
-        # bullet-ish prefix helps readability in plain text
-        el.text = ("- " + el.text) if not el.text.startswith("- ") else el.text
+        if not el.text.startswith("- "):
+            el.text = "- " + el.text
         el.tail = (el.tail or "") + "\n"
-
-    # Tables: separate cells with tabs and rows with newlines
-    for el in tree.xpath("//td|//th"):
-        el.tail = (el.tail or "") + "\t"
-    for el in tree.xpath("//tr"):
-        el.tail = (el.tail or "") + "\n"
-
-    # Add line breaks after headings to preserve SEC section markers
     for el in tree.xpath("//h1|//h2|//h3|//h4|//h5|//h6"):
         el.tail = (el.tail or "") + "\n\n"
 
     text = tree.text_content()
-    return _normalize_ws(text)
+    text = _normalize_ws(text)
+    text = clean_invisible_and_blank_lines(text, keep_blank=1)
+    return text
 
 
 def clean_invisible_and_blank_lines(text: str, keep_blank: int = 1) -> str:
@@ -268,28 +460,30 @@ def _merge_unit_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _clean_inline_text(s: str) -> str:
-    s = _INVISIBLES_RE.sub("", s or "")
+def _clean_inline_text(s: HtmlMixin | str) -> str:
+    # NEW: accept lxml elements too
+    if isinstance(s, HtmlMixin):
+        s = s.text_content()
+    s = s or ""
+    s = _INVISIBLES_RE.sub("", s)
     s = _UNISPACES_RE.sub(" ", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
 
-def _candidate_caption(text: str, max_len: int = 300) -> bool:
+def _candidate_caption(text: str, max_len: int = 500) -> bool:
     if not text or _CAPTION_DENY_RE.search(text):
         return False
     # A “caption-like” line is short and either:
     # - has table-ish keywords, or
     # - ends with a colon, or
     # - includes unit hints ( (in millions), (unaudited), etc. )
-    if len(text) <= max_len and (
-        _CAPTION_KEYS_RE.search(text) or text.endswith(":") or _CAPTION_UNITS_RE.search(text)
-    ):
+    if len(text) <= max_len and (_CAPTION_KEYS_RE.search(text) or text.endswith(":") or _CAPTION_UNITS_RE.search(text)):
         return True
     return False
 
 
-def _infer_table_caption(el, max_up: int = 2, max_back: int = 12, max_length: int = 1000) -> str:
+def _infer_table_caption(el, max_up: int = 2, max_back: int = 12, max_length: int = 500) -> str:
     """
     Prefer <caption>. Otherwise scan a few previous siblings (and ancestors' previous siblings)
     for a short <p>/<div>/<span> line that looks like a caption. Skip "Table of Contents" etc.
@@ -326,7 +520,7 @@ def _infer_table_caption(el, max_up: int = 2, max_back: int = 12, max_length: in
                 continue
 
             text = _clean_inline_text(prev.text_content())
-            if _candidate_caption(text):
+            if _candidate_caption(text, max_len=max_length):
                 chosen_text = text
                 # 2a) Try to append a nearby units line that sits between caption and table
                 # (e.g. "(in millions)" on the very next <p> above the table)
@@ -352,7 +546,7 @@ def _infer_table_caption(el, max_up: int = 2, max_back: int = 12, max_length: in
             tag = (prev.tag or "").lower()
             if re.fullmatch(r"h[1-6]", tag, re.I):
                 text = _clean_inline_text(prev.text_content())
-                if _candidate_caption(text):
+                if _candidate_caption(text, max_len=max_length):
                     return text[:max_length]
         node = node.getparent()
         if node is None:
@@ -361,69 +555,54 @@ def _infer_table_caption(el, max_up: int = 2, max_back: int = 12, max_length: in
     return ""
 
 
-def extract_tables_markdown_and_facts(html_bytes: bytes) -> list[dict[str, Any]]:
-    """
-    Returns a list of dicts:
-    {
-        'caption': str,
-        'markdown': str,   # GitHub-style table
-        'facts': [str],    # row-wise sentences
-        'n_rows': int,
-        'n_cols': int
-    }
-    """
+def extract_tables_markdown_and_facts(html_bytes: bytes, max_length: int = 500) -> list[dict[str, Any]]:
     tree = fromstring(html_bytes)
     tables = tree.xpath("//table")
-    out = []
+    groups = _gather_adjacent_data_tables(tables)  # merge candidates
 
-    for t in tables:
-        frag_html = tostring(t, encoding="unicode")
+    out = []
+    for group in groups:
+        # Only keep groups whose first member is 'data'
+        if _classify_table(group[0]) != "data":
+            continue
+
+        # Build one HTML fragment by concatenating the tables' rows
+        frags = [tostring(t, encoding="unicode") for t in group]
+        # Wrap in a single table so pandas reads once
+        merged_html = (
+            "<table>" + "".join(re.sub(r"(?is)^<table[^>]*>|</table>$", "", f).strip() for f in frags) + "</table>"
+        )
+
         try:
-            dfs = pd.read_html(StringIO(frag_html), flavor="lxml")
+            dfs = pd.read_html(StringIO(merged_html), flavor="lxml")
         except Exception:
-            # fallback: try html5lib if available
             try:
-                dfs = pd.read_html(StringIO(frag_html), flavor="bs4")
+                dfs = pd.read_html(StringIO(merged_html), flavor="bs4")
             except Exception:
-                continue  # skip malformed table
+                continue
 
         if not dfs:
             continue
 
-        # Some SEC tables parse into multiple frames; concatenate vertically when shapes align
         df = pd.concat(dfs, ignore_index=True, sort=False)
-
-        df = _flatten_multiindex_columns(df)
-        # Clean cells
-        df = df.map(_clean_cell)
-        # Drop empties
+        df = _flatten_multiindex_columns(df).map(_clean_cell)
         df = _drop_empty_rows_cols(df)
-        # Merge $/% unit columns
         df = _merge_unit_columns(df)
         if df.empty or df.shape[1] < 2:
             continue
 
-        # Identify row label column (heuristic: first non-numeric-heavy column)
         row_label_col = df.columns[0]
-
-        # Numeric normalization (but keep the row label as text)
         for c in df.columns:
-            if c == row_label_col:
-                continue
-            df[c] = _normalize_numeric_series(df[c])
-
-        # final drop of empty cols/rows after normalization
+            if c != row_label_col:
+                df[c] = _normalize_numeric_series(df[c])
         df = _drop_empty_rows_cols(df)
         if df.empty or df.shape[1] < 2:
             continue
 
-        # Produce Markdown
         md = df.to_markdown(index=False)
+        # Caption inference only runs once per merged group (use the first table element)
+        caption = _infer_table_caption(group[0], max_length=max_length)
 
-        # Using improved parsing method
-        caption = _infer_table_caption(t)
-
-        # Build facts: “<caption>: <row> — <col> = <value>”
         facts = []
         for _, row in df.iterrows():
             row_label = row.get(row_label_col, "")
@@ -435,16 +614,14 @@ def extract_tables_markdown_and_facts(html_bytes: bytes) -> list[dict[str, Any]]
                 val = row.get(col, "")
                 if val == "":
                     continue
-                fact = f"{caption}: {row_label} — {col} = {val}" if caption else f"{row_label} — {col} = {val}"
-                facts.append(fact)
+                facts.append(f"{caption}: {row_label} — {col} = {val}" if caption else f"{row_label} — {col} = {val}")
 
         out.append(
-            # TODO: use better dataclass
             {
                 "caption": caption,
                 "markdown": md,
                 "facts": facts,
-                "df": df,  # for debugging
+                "df": df,  # keep for debugging as you do now
                 "n_rows": int(df.shape[0]),
                 "n_cols": int(df.shape[1]),
             }
@@ -454,31 +631,33 @@ def extract_tables_markdown_and_facts(html_bytes: bytes) -> list[dict[str, Any]]
 
 def fetch_10ks_for_tickers(tickers: list[str], output_dir: Path, per_company: int = 2, delay: float = 0.2):
     out_raw_folder = output_dir / "10k_raw"
-    out_meta_folder = output_dir / "meta"
     out_raw_folder.mkdir(parents=True, exist_ok=True)
-    out_meta_folder.mkdir(parents=True, exist_ok=True)
 
     t2c = ticker_map()
     for t in tqdm(tickers, desc="fetching tickers"):
         cik = t2c[t.upper()]
         for acc_no, primary, fdate in tqdm(list_10k_submissions(cik, per_company), desc=f"processing ticker {t}"):
+            base = f"{t.upper()}_{acc_no}"
+            doc_id = f"10k::{t.upper()}::{acc_no}"
+
+            # fetch raw HTML
             html, src = download_primary(cik, acc_no, primary)
 
-            text = extract_text_lxml_preserve_tables(html)
-            # keep at most one blank line
-            text = clean_invisible_and_blank_lines(text, keep_blank=1)
-
-            # TODO:
-            # - how to save these tables?
-            # - should we remove tables from the above `text` to deduplicate information?
+            # first, extract table markdown + caption + facts
             tables = extract_tables_markdown_and_facts(html.encode("utf-8"))
 
-            base = f"{t.upper()}_{acc_no}"
+            # then, extract text with table markers in place of table content
+            # dont include caption in table marker bcos caption already exists in `text` nearby
+            text = extract_text_without_tables_with_markers(
+                html,
+                doc_id,
+            )
 
-            (out_raw_folder / f"{base}.html").write_text(html, encoding="utf-8")
-            (out_raw_folder / f"{base}.txt").write_text(text, encoding="utf-8")
-
+            # finally, write to disk
+            norm_dir = out_dir / "normalized" / base
+            norm_dir.mkdir(parents=True, exist_ok=True)
             meta = {
+                "doc_id": doc_id,
                 "ticker": t.upper(),
                 "cik": cik,
                 "filing_date": fdate,
@@ -487,16 +666,81 @@ def fetch_10ks_for_tickers(tickers: list[str], output_dir: Path, per_company: in
                 "source_url": src,
                 "form": "10-K",
             }
-            (out_meta_folder / f"{base}.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+            (norm_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
 
-            time.sleep(delay)  # be polite
+            # text.jsonl (one record)
+            # TODO: upgrade later to multiple section records after adding sectionization (heading parsing like Risks)
+            with (norm_dir / "text.jsonl").open("w", encoding="utf-8") as f:
+                rec = {
+                    "doc_id": doc_id,
+                    "section_path": [],  # TODO: update after sectionization
+                    "text": text,
+                    "span": None,
+                    "source_url": src,
+                    "ticker": t.upper(),
+                    "cik": cik,
+                    "filing_date": fdate,
+                }
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+            # write table data
+            tables_md = []
+            facts_rows = []
+
+            for i, tb in enumerate(tables):
+                table_id = f"{doc_id}::table::{i:04d}"
+                caption = tb["caption"]
+
+                tables_md.append(
+                    {
+                        "doc_id": doc_id,
+                        "table_id": table_id,
+                        "caption": caption,
+                        "markdown": tb["markdown"],
+                        "n_rows": tb["n_rows"],
+                        "n_cols": tb["n_cols"],
+                        "section_path": [],  # TODO: update after sectionization
+                        "source_url": src,
+                        "units_hint": None,
+                        "order_index": i,
+                    }
+                )
+
+                for fact in tb["facts"]:
+                    facts_rows.append(
+                        {
+                            "doc_id": doc_id,
+                            "table_id": table_id,
+                            "fact": fact,
+                            "order_index": i,
+                        }
+                    )
+
+            # write jsonl
+            with (norm_dir / "tables_md.jsonl").open("w", encoding="utf-8") as f:
+                for r in tables_md:
+                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+            with (norm_dir / "facts.jsonl").open("w", encoding="utf-8") as f:
+                for r in facts_rows:
+                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+            # TODO: consider parquet for more structured data
+            # pq.write_table(pa.Table.from_pylist(tbl_rows), norm_dir / "tables.parquet")
+
+            # write raw data
+            (out_raw_folder / f"{base}.html").write_text(html, encoding="utf-8")
+            (out_raw_folder / f"{base}.txt").write_text(text, encoding="utf-8")
+
+            # be polite to SEC servers
+            time.sleep(delay)
 
     logger.success("Done.")
 
 
 if __name__ == "__main__":
     # TODO: get list of tickers from somewhere, e.g. top 500 companies
-    # tickers = ["APH", "GOOGL", "NVDA"]
-    tickers = ["APH"]
+    tickers = ["APH", "GOOGL", "NVDA"]
+    # tickers = ["APH"]
     out_dir = Path("./data")
-    fetch_10ks_for_tickers(tickers, out_dir, per_company=1, delay=0.2)
+    fetch_10ks_for_tickers(tickers, out_dir, per_company=5, delay=0.1)
