@@ -1,5 +1,8 @@
 [project]
 name = "finance-rag-assistant"
+version = "0.1.0"
+description = "A Retrieval-Augmented Generation (RAG) system for answering financial questions using SEC 10-K filings."
+authors = [ {name = "Min Htoo Lin",email = "linmin.htoo@gmail.com"} ]
 keywords = ["rag", "llm", "langchain", "faiss", "finance", "ollama"]
 license = { text = "MIT" }
 readme = "README.md"
@@ -32,10 +35,7 @@ dependencies = [
 ]
 
 [tool.poetry]
-name = "finance-rag-assistant"
-version = "0.1.0"
-description = "A Retrieval-Augmented Generation (RAG) system for answering financial questions using SEC 10-K filings."
-authors = ["Min Htoo Lin"]
+package-mode = false
 packages = [{ include = "finance_rag_assistant", from = "src" }]
 
 [build-system]

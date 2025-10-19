@@ -25,4 +25,4 @@ if st.button("Ask") and q:
     st.markdown("### Sources")
     for i, d in enumerate(out["source_documents"]):
         src = d.metadata.get("source", "unknown")
-        st.caption(f"{i+1}. {src}")
+        st.caption(f"{i + 1}. {src}")
