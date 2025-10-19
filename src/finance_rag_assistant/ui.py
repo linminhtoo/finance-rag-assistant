@@ -7,6 +7,7 @@ API (GPT-4o-mini / Claude Haiku / Mistral-Large): better instruction-following &
 
 Embeddings: local bge-small is fine. If you want best-in-class quickly: text-embedding-3-large (API) or nomic-embed-text-v1 (API). You can swap later by rebuilding FAISS.
 """
+
 import streamlit as st
 from rag import make_chain
 
@@ -25,4 +26,3 @@ if st.button("Ask") and q:
     for i, d in enumerate(out["source_documents"]):
         src = d.metadata.get("source", "unknown")
         st.caption(f"{i+1}. {src}")
-

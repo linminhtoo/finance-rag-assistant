@@ -115,8 +115,8 @@ tar -C ollama/ -xvzf ollama-linux-amd64.tgz
 # verify with
 ./ollama/bin/ollama -v
 
-# pull a model to local
-# ollama pull llama3.1:8b-instruct
+# run a model
+./ollama/bin/ollama run deepseek-r1:latest
 
 source .venv/bin/activate
 

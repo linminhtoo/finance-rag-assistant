@@ -1,3 +1,11 @@
+# TODOs
+
+- confidence estimation from output tokens logprobs
+    - can be done in post after initial generation, so user gets the tokens fast
+    - can even highlight uncertain statements / claims in red as a UI feature
+    - later on in the app, we should store these along with text, with some proper traceable metadata
+
+
 # choice of LLM
 looked at https://lmarena.ai/leaderboard/text
 
@@ -17,7 +25,7 @@ see: https://ollama.com/library/deepseek-r1:latest
 DeepSeek R1 performs decently on leaderboard - 11th ranked as of 19 Oct 2025, 1417 Elo
 let's use the 5 GB model (8B) which has the "latest" tag.
 from DeepSeek docs, it looks like distillation was done on Qwen3-8B to create this model.
-Despite being a small model, it performs exceptionally well on benchmarks, 
+Despite being a small model, it performs exceptionally well on benchmarks,
 sometimes even outperforming much larger models such as Qwen3-235B on Humanity's Last Exam.
 
 ```bash
@@ -38,7 +46,7 @@ deep comparison of APH vs NVDA vs AMZN
 how to check scraping was done correctly?
 can't possibly inspect each 10K individually, need a way to automate this
 
-## issues with parsing HTML 
+## issues with parsing HTML
 - tried `readability.Document`, but it wrongly discards a lot of relevant content
 - safest is simple regex substitution/parsing, however it fails to handle many symbols/special html characters/tags
 - final best method is to use `lxml` followed by cleaning of invisible/blank characters and lines

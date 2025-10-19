@@ -12,9 +12,10 @@ Answer verification: second pass that checks whether each sentence is supported 
 -----
 
 If you prefer LlamaIndex (equally good), it's a 10-line swap:
-from llama_index.core import VectorStoreIndex, SimpleDirectoryReader etc. 
+from llama_index.core import VectorStoreIndex, SimpleDirectoryReader etc.
 LlamaIndex also has great RAG eval & observability add-ons.
 """
+
 from langchain.chains import RetrievalQA
 from langchain.prompts import ChatPromptTemplate
 from langchain.retrievers import ContextualCompressionRetriever
@@ -32,14 +33,14 @@ Context:
 {context}
 Answer:"""
 
-def load_vectorstore():
-    emb = HuggingFaceEmbeddings(
-        model_name="BAAI/bge-small-en-v1.5", normalize_embedding=True
-    )
+
+def load_vectorstore() -> FAISS:
+    emb = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5", normalize_embedding=True)
     vs = FAISS.load_local("artifacts/faiss_index", emb, allow_dangerous_deserialization=True)
     return vs
 
-def build_retriever(vs, use_reranker=True):
+
+def build_retriever(vs: FAISS, use_reranker: bool = True) -> ContextualCompressionRetriever:
     base = vs.as_retriever(search_type="similarity", search_kwargs={"k": 20})
     if not use_reranker:
         return base
@@ -47,11 +48,10 @@ def build_retriever(vs, use_reranker=True):
         model="BAAI/bge-reranker-base",
         top_n=6,
     )
-    return ContextualCompressionRetriever(
-        base_compressor=compressor, base_retriever=base
-    )
+    return ContextualCompressionRetriever(base_compressor=compressor, base_retriever=base)
 
-def make_chain():
+
+def make_chain() -> RetrievalQA:
     llm = ChatOllama(model="llama3.1:8b-instruct", temperature=0.2)
     vs = load_vectorstore()
     retriever = build_retriever(vs, use_reranker=True)

@@ -1,0 +1,53 @@
+# .pre-commit-config.yaml
+repos:
+  # Ruff: lint + format
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        name: ruff (lint & autofix)
+        args: [--fix]
+        files: ^(src/|tests/)
+      - id: ruff-format
+        name: ruff (format)
+        files: ^(src/|tests/)
+
+  # MyPy: static typing
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.11.2
+    hooks:
+      - id: mypy
+        name: mypy
+        files: ^(src/|tests/)
+        args: [--config-file=pyproject.toml]
+        additional_dependencies:
+          - pydantic>=2
+          - fastapi
+          - types-requests
+          - types-tabulate
+
+  # Poetry sanity check
+  - repo: https://github.com/python-poetry/poetry
+    rev: 1.8.3
+    hooks:
+      - id: poetry-check
+
+  # Jupyter notebook cleanup
+  - repo: https://github.com/kynan/nbstripout
+    rev: 0.7.1
+    hooks:
+      - id: nbstripout
+        files: \.ipynb$
+
+  # Repo hygiene checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: detect-private-key
+      - id: check-added-large-files
+        args: ["--maxkb=2000"]

@@ -1,10 +1,5 @@
 [project]
 name = "finance-rag-assistant"
-version = "0.1.0"
-description = "A Retrieval-Augmented Generation (RAG) system for answering financial questions using SEC 10-K filings."
-authors = [
-    {name = "Min Htoo Lin",email = "linmin.htoo@gmail.com"}
-]
 keywords = ["rag", "llm", "langchain", "faiss", "finance", "ollama"]
 license = { text = "MIT" }
 readme = "README.md"
@@ -36,6 +31,12 @@ dependencies = [
     "tabulate (>=0.9.0,<0.10.0)",
 ]
 
+[tool.poetry]
+name = "finance-rag-assistant"
+version = "0.1.0"
+description = "A Retrieval-Augmented Generation (RAG) system for answering financial questions using SEC 10-K filings."
+authors = ["Min Htoo Lin"]
+packages = [{ include = "finance_rag_assistant", from = "src" }]
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
@@ -45,25 +46,49 @@ build-backend = "poetry.core.masonry.api"
 dev = [
     "pytest (>=8.4.2,<9.0.0)",
     "ruff (>=0.14.1,<0.15.0)",
-    "black (>=25.9.0,<26.0.0)",
     "mypy (>=1.18.2,<2.0.0)",
-    "jupyter (>=1.1.1,<2.0.0)"
+    "jupyter (>=1.1.1,<2.0.0)",
+    "pre-commit (>=4.3.0,<5.0.0)"
 ]
 
-[tool.black]
-line-length = 120
-target-version = ['py312']
-skip-string-normalization = true
-
-[tool.ruff]
-line-length = 120
-select = ["E", "F", "I"]
-ignore = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra -q"
 
 
-[tool.poetry]
-packages = [{ include = "finance_rag_assistant", from = "src" }]
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+# Lint rules: E (pycodestyle), F (pyflakes), I (isort)
+select = ["E", "F", "I"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+# Match your previous Black preferences
+line-ending = "lf"
+quote-style = "preserve"
+indent-style = "space"
+skip-magic-trailing-comma = false
+docstring-code-format = true
+docstring-code-line-length = "dynamic"
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+strict_equality = true
+ignore_missing_imports = true
+show_error_codes = true
+pretty = true
+plugins = ["pydantic.mypy"]
+
+# [mypy-tests.*]
+# Allow looser typing in tests
+# disallow_untyped_defs = false
+# check_untyped_defs = false

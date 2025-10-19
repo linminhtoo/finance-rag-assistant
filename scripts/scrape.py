@@ -419,7 +419,7 @@ def extract_tables_markdown_and_facts(html_bytes: bytes) -> list[dict[str, Any]]
 
         # Produce Markdown
         md = df.to_markdown(index=False)
-        
+
         # Using improved parsing method
         caption = _infer_table_caption(t)
 

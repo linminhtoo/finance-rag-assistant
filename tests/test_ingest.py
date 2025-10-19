@@ -1,3 +1,2 @@
-
-def test_ingest():
+def test_ingest() -> None:
     assert True
