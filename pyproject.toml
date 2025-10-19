@@ -1,0 +1,69 @@
+[project]
+name = "finance-rag-assistant"
+version = "0.1.0"
+description = "A Retrieval-Augmented Generation (RAG) system for answering financial questions using SEC 10-K filings."
+authors = [
+    {name = "Min Htoo Lin",email = "linmin.htoo@gmail.com"}
+]
+keywords = ["rag", "llm", "langchain", "faiss", "finance", "ollama"]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "langchain>=0.3.0",
+    "langchain-community>=0.3.0",
+    "sentence-transformers>=2.7.0",
+
+    # NOTE: poetry refuses to install faiss-gpu, why?
+    # must we use conda?
+    # `conda install -c pytorch -c nvidia faiss-gpu=1.12.0`
+    "faiss-cpu",
+
+    "streamlit",
+    "pydantic>=2.0",
+    "tiktoken",
+    "unstructured[all-docs]",
+    "pypdf",
+    "flagembedding",
+    "ragas",
+    "datasets",
+    "fastapi",
+    "uvicorn",
+    "httpx",
+    "tenacity",
+    "loguru",
+    "readability-lxml (>=0.8.4.1,<0.9.0.0)",
+    "tabulate (>=0.9.0,<0.10.0)",
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[dependency-groups]
+dev = [
+    "pytest (>=8.4.2,<9.0.0)",
+    "ruff (>=0.14.1,<0.15.0)",
+    "black (>=25.9.0,<26.0.0)",
+    "mypy (>=1.18.2,<2.0.0)",
+    "jupyter (>=1.1.1,<2.0.0)"
+]
+
+[tool.black]
+line-length = 120
+target-version = ['py312']
+skip-string-normalization = true
+
+[tool.ruff]
+line-length = 120
+select = ["E", "F", "I"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
+
+
+[tool.poetry]
+packages = [{ include = "finance_rag_assistant", from = "src" }]
