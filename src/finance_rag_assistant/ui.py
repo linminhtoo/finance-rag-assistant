@@ -9,10 +9,11 @@ Embeddings: local bge-small is fine. If you want best-in-class quickly: text-emb
 """
 
 import streamlit as st
-from rag import make_chain
 
-st.set_page_config(page_title="Domain RAG", layout="wide")
-st.title("🔎 Domain RAG Assistant")
+from finance_rag_assistant.rag import make_chain
+
+st.set_page_config(page_title="Financial RAG", layout="wide")
+st.title("Financial RAG Assistant")
 
 if "chain" not in st.session_state:
     st.session_state.chain = make_chain()

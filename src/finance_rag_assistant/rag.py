@@ -1,6 +1,4 @@
-from flashrank import Ranker  # local CPU/GPU reranker backend
 from langchain_community.chains import PebbloRetrievalQA
-from langchain_community.document_compressors import FlashrankRerank
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -10,8 +8,8 @@ from langchain_ollama import ChatOllama
 # TODO: improve to agent -> allow web search etc
 # reference: https://smith.langchain.com/hub/rlm/rag-prompt
 BASE_PROMPT = """You are a top-tier financial analyst working at a world-class hedge fund.
-Use the following pieces of retrieved context to answer the question. 
-If you don't know the answer, just say that you don't know. 
+Use the following pieces of retrieved context to answer the question.
+If you don't know the answer, just say that you don't know.
 Cite sources as [Title or Filename, page].
 
 Question: {question}
@@ -34,9 +32,9 @@ def load_vectorstore() -> FAISS:
     return vs
 
 
-def build_retriever(vs: FAISS, use_reranker: bool = False):
+def build_retriever(vs: FAISS, use_reranker: bool = False) -> FAISS:
     base_retriever = vs.as_retriever(search_type="similarity", search_kwargs={"k": 20})
-    
+
     if not use_reranker:
         return base_retriever
 
@@ -51,10 +49,7 @@ def build_retriever(vs: FAISS, use_reranker: bool = False):
 
 
 def make_chain() -> PebbloRetrievalQA:
-    llm = ChatOllama(
-        model=CHAT_MODEL,
-        temperature=0.2
-    )
+    llm = ChatOllama(model=CHAT_MODEL, temperature=0.2)
     vs = load_vectorstore()
     retriever = build_retriever(vs, use_reranker=False)
     prompt = ChatPromptTemplate.from_template(BASE_PROMPT)
