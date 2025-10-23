@@ -5,6 +5,16 @@
     - can even highlight uncertain statements / claims in red as a UI feature
     - later on in the app, we should store these along with text, with some proper traceable metadata
 
+- try with tools
+    - gpt-oss:20b has been finetuned for tool use
+    - how about MCP?
+    - for our use-case, we may want tools such as fetching financial data?
+        - web-search for financial news, etc?
+        - reddit API for reddit DD sharing posts?
+        - could even have discord API hmm
+
+-
+
 
 # choice of LLM
 looked at https://lmarena.ai/leaderboard/text
@@ -113,11 +123,14 @@ solution: yes, identify tables via HTML tags -> parse with `pandas` -> generate 
  'n_cols': 9}
 ```
 
+## Alternative: keep tables (after converting to markdown) within the .txt files to reduce complexity
+- TODO: compare both approaches in terms of RAG metrics
+- why? concerned that separate approach is too complicated & brittle - if markdown is incorrect, model might be confused
 
-## better RAG chunking (already addressed in `lxml` function)
+## TODO: better RAG chunking based on 10K section headers
 - add light postprocessing to make sure SEC section headers are preserved and become chunk boundaries
 
-example (this is not the code we used in the end, but the idea is similar)
+example idea
 ```python3
 SEC_SECTION_RE = re.compile(
     r"(?im)^(Item\s+(1A?|2|3|4|5|6|7A?|8|9A?|9B|10|11|12|13|14)\.?\s+[^\n]+)\n"
