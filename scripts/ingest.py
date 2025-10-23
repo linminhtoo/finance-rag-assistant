@@ -8,47 +8,59 @@ import json
 import re
 from pathlib import Path
 
-# from langchain.schema import Document
-from langchain_community.document_loaders import PyPDFLoader, TextLoader
+from langchain_community.document_loaders import JSONLoader
+from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from tqdm import tqdm
 
-RAW_DIR = Path("data/raw")
-OUT_PATH = Path("data/processed.jsonl")
 
-def load_docs():
+def load_docs(input_folder: Path) -> list[Document]:
     docs = []
-    for p in RAW_DIR.rglob("*"):
-        if p.suffix.lower() in [".pdf"]:
-            try:
-                loader = PyPDFLoader(str(p))
-                docs.extend(loader.load())
-            except Exception:
-                pass
-        elif p.suffix.lower() in [".md", ".txt", ".html"]:
-            docs.append(TextLoader(str(p), encoding="utf-8").load()[0])
+    for folder in tqdm(input_folder.iterdir(), desc="loading raw documents"):
+        text_path = folder / "text.jsonl"
+        if not text_path.exists():
+            continue
+        loader = JSONLoader(
+            file_path=text_path,
+            jq_schema=".text",
+            text_content=True,
+            json_lines=True,
+        )
+        docs.extend(loader.load())
     return docs
+
 
 def clean_text(t: str) -> str:
     t = re.sub(r"\s+\n", "\n", t)
     t = re.sub(r"\n{3,}", "\n\n", t)
     return t.strip()
 
+
 def main():
-    raw_docs = load_docs()
+    RAW_DIR = Path("/home/mlin/repos/scratch/finance-rag-assistant/scripts/data/normalized")
+    OUT_PATH = Path("/home/mlin/repos/scratch/finance-rag-assistant/scripts/data/processed.jsonl")
+
+    raw_docs = load_docs(input_folder=RAW_DIR)
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=3200, chunk_overlap=400,  # characters ~ ~800–1000 tokens
+        # TODO: manual inspection did not see overlaps between adjacent chunks, is this a bug???
+        chunk_size=3200,
+        chunk_overlap=400,  # characters ~ ~800–1000 tokens
         separators=["\n\n", "\n", " ", ""],
     )
     records = []
-    for d in raw_docs:
-        meta = {**(d.metadata or {})}
-        meta["source"] = meta.get("source") or meta.get("file_path")
+    for d in tqdm(raw_docs, desc="processing documents"):
+        meta = d.metadata
+        with open(meta["source"], "r") as f:
+            file = json.load(f)
+            meta |= {k: file[k] for k in ["doc_id", "ticker", "cik", "filing_date", "source_url"]}
         for chunk in splitter.split_text(clean_text(d.page_content)):
             records.append({"text": chunk, "metadata": meta})
+
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     with OUT_PATH.open("w", encoding="utf-8") as f:
         for r in records:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
 
 if __name__ == "__main__":
     main()
