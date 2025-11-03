@@ -13,7 +13,8 @@
         - reddit API for reddit DD sharing posts?
         - could even have discord API hmm
 
--
+- play around with memory
+    - https://docs.langchain.com/oss/python/concepts/memory
 
 
 # choice of LLM
