@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from typing import Any, Callable, List
 
 # v1.0 agent + tools APIs
 from langchain.agents import create_agent
@@ -8,6 +8,7 @@ from langchain.messages import HumanMessage
 from langchain.tools import tool
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
+from langchain_core.vectorstores.base import VectorStoreRetriever
 from langchain_huggingface import HuggingFaceEmbeddings
 
 # -----------------------------
@@ -44,7 +45,7 @@ def load_vectorstore() -> FAISS:
     return FAISS.load_local(INDEX_PATH, emb, allow_dangerous_deserialization=True)
 
 
-def build_retriever(vs: FAISS):
+def build_retriever(vs: FAISS) -> VectorStoreRetriever:
     # tune k as desired; agent may call the tool multiple times
     return vs.as_retriever(search_type="similarity", search_kwargs={"k": 8})
 
@@ -54,9 +55,9 @@ def build_retriever(vs: FAISS):
 # Return BOTH a readable string AND the raw docs as an artifact so the UI
 # can list sources without parsing LLM output.
 # -----------------------------
-def make_kb_tool(retriever):
+def make_kb_tool(retriever: VectorStoreRetriever) -> Callable[[str], tuple[str, list[dict]]]:
     @tool("kb_search", response_format="content_and_artifact")
-    def kb_search(query: str) -> Tuple[str, List[dict]]:
+    def kb_search(query: str) -> tuple[str, list[dict]]:
         """Search the internal document index for relevant passages to answer finance questions."""
         docs: List[Document] = retriever.invoke(query)
         # Produce readable content the model can quote from
@@ -84,7 +85,7 @@ class _StreamlitAgentAdapter:
     agent: Any
     tool_name: str = "kb_search"
 
-    def __call__(self, inputs: Dict[str, Any]):
+    def __call__(self, inputs: dict[str, Any]) -> dict[str, Any]:
         q = inputs.get("query") or inputs.get("input") or ""
         resp = self.agent.invoke({"messages": [HumanMessage(content=q)]})
 
@@ -117,7 +118,7 @@ class _StreamlitAgentAdapter:
 # -----------------------------
 # Factory
 # -----------------------------
-def make_chain():
+def make_chain() -> _StreamlitAgentAdapter:
     vs = load_vectorstore()
     retriever = build_retriever(vs)
     kb_tool = make_kb_tool(retriever)
